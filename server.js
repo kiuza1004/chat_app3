@@ -133,6 +133,9 @@ app.post('/api/upload', requireAuth, (req, res) => {
   });
 });
 
+const onlineUsers = new Map();
+const getOnlineList = () => [...onlineUsers.values()].map((u) => ({ id: u.id, username: u.username }));
+
 io.on('connection', (socket) => {
   const sess = socket.request.session;
   if (!sess || !sess.userId) {
@@ -143,6 +146,13 @@ io.on('connection', (socket) => {
   const userId = sess.userId;
   const username = sess.username;
   let currentRoom = null;
+
+  const wasOffline = !onlineUsers.has(userId);
+  const entry = onlineUsers.get(userId) || { id: userId, username, count: 0 };
+  entry.count++;
+  onlineUsers.set(userId, entry);
+  socket.emit('presence', getOnlineList());
+  if (wasOffline) socket.broadcast.emit('presence', getOnlineList());
 
   socket.on('join', (roomId) => {
     const id = parseInt(roomId, 10);
@@ -200,6 +210,13 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     if (currentRoom) db.markRoomRead(userId, currentRoom);
+    const e = onlineUsers.get(userId);
+    if (!e) return;
+    e.count--;
+    if (e.count <= 0) {
+      onlineUsers.delete(userId);
+      io.emit('presence', getOnlineList());
+    }
   });
 });
 

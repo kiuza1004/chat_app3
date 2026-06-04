@@ -251,5 +251,25 @@
     renderBadges();
   });
 
+  const presenceListEl = document.getElementById('presence-list');
+  const presenceCountEl = document.getElementById('presence-count');
+  socket.on('presence', (users) => {
+    presenceCountEl.textContent = users.length;
+    presenceListEl.innerHTML = '';
+    users
+      .slice()
+      .sort((a, b) => {
+        if (a.id === me.id) return -1;
+        if (b.id === me.id) return 1;
+        return a.username.localeCompare(b.username);
+      })
+      .forEach((u) => {
+        const li = document.createElement('li');
+        if (u.id === me.id) li.classList.add('me');
+        li.textContent = u.username + (u.id === me.id ? ' (나)' : '');
+        presenceListEl.appendChild(li);
+      });
+  });
+
   await loadRooms();
 })();
