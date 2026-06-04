@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simple Chat</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="user-bar">
+        <span id="me-name">…</span>
+        <button id="logout-btn" class="ghost">로그아웃</button>
+      </div>
+
+      <div class="room-create">
+        <input id="new-room" type="text" placeholder="새 채팅방 이름" maxlength="40" />
+        <button id="create-room">생성</button>
+      </div>
+
+      <h3>채팅방</h3>
+      <ul id="room-list" class="room-list"></ul>
+    </aside>
+
+    <section class="chat">
+      <header class="chat-header">
+        <h2 id="room-name">채팅방을 선택하세요</h2>
+      </header>
+      <ul id="messages" class="messages"></ul>
+      <form id="send-form" class="send-form">
+        <input id="msg-input" type="text" placeholder="메시지를 입력하세요" autocomplete="off" maxlength="1000" disabled />
+        <button id="send-btn" type="submit" disabled>전송</button>
+      </form>
+    </section>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

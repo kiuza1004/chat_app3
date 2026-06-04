@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>로그인 — Simple Chat</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="auth-wrap">
+    <div class="card">
+      <h1>Simple Chat</h1>
+      <p class="sub">아이디와 비밀번호로 시작하세요</p>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="login">로그인</button>
+        <button class="tab" data-tab="signup">회원가입</button>
+      </div>
+
+      <form id="auth-form" autocomplete="off">
+        <input id="username" type="text" placeholder="아이디" required minlength="2" maxlength="20" />
+        <input id="password" type="password" placeholder="비밀번호" required minlength="4" />
+        <button id="submit-btn" type="submit">로그인</button>
+        <div id="auth-error" class="error"></div>
+      </form>
+    </div>
+  </main>
+
+  <script>
+    let mode = 'login';
+
+    document.querySelectorAll('.tab').forEach((t) => {
+      t.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+        t.classList.add('active');
+        mode = t.dataset.tab;
+        document.getElementById('submit-btn').textContent = mode === 'login' ? '로그인' : '회원가입';
+        document.getElementById('auth-error').textContent = '';
+      });
+    });
+
+    document.getElementById('auth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('auth-error');
+      errEl.textContent = '';
+
+      try {
+        const res = await fetch(`/api/${mode}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          errEl.textContent = data.error || '오류가 발생했습니다';
+          return;
+        }
+        location.href = '/chat.html';
+      } catch (err) {
+        errEl.textContent = '네트워크 오류';
+      }
+    });
+
+    fetch('/api/me').then((r) => { if (r.ok) location.href = '/chat.html'; });
+  </script>
+</body>
+</html>
