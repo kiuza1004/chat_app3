@@ -7,6 +7,7 @@
   const socket = io({ withCredentials: true });
   let currentRoomId = null;
   let pendingAttachment = null;
+  const unreadCounts = new Map();
 
   const roomListEl = document.getElementById('room-list');
   const messagesEl = document.getElementById('messages');
@@ -94,24 +95,50 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
+  function renderBadges() {
+    document.querySelectorAll('#room-list li').forEach((el) => {
+      const id = parseInt(el.dataset.roomId, 10);
+      const count = unreadCounts.get(id) || 0;
+      let badge = el.querySelector('.badge');
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'badge';
+          el.appendChild(badge);
+        }
+        badge.textContent = count > 99 ? '99+' : String(count);
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+  }
+
   async function loadRooms() {
     const res = await fetch('/api/rooms');
     if (!res.ok) return;
     const rooms = await res.json();
     roomListEl.innerHTML = '';
     rooms.forEach((r) => {
+      unreadCounts.set(r.id, r.unread_count || 0);
+
       const li = document.createElement('li');
       li.dataset.roomId = r.id;
       if (r.id === currentRoomId) li.classList.add('active');
+
+      const info = document.createElement('div');
+      info.className = 'room-info';
       const name = document.createElement('div');
       name.textContent = r.name;
       const sub = document.createElement('small');
       sub.textContent = `by ${r.created_by_name}`;
-      li.appendChild(name);
-      li.appendChild(sub);
+      info.appendChild(name);
+      info.appendChild(sub);
+      li.appendChild(info);
+
       li.addEventListener('click', () => joinRoom(r.id, r.name));
       roomListEl.appendChild(li);
     });
+    renderBadges();
   }
 
   async function joinRoom(id, name) {
@@ -119,9 +146,11 @@
     roomNameEl.textContent = name;
     messagesEl.innerHTML = '';
     clearAttachment();
+    unreadCounts.set(id, 0);
     document.querySelectorAll('#room-list li').forEach((el) => {
       el.classList.toggle('active', parseInt(el.dataset.roomId, 10) === id);
     });
+    renderBadges();
 
     const res = await fetch(`/api/rooms/${id}/messages`);
     if (res.ok) {
@@ -215,6 +244,12 @@
 
   socket.on('message', appendMessage);
   socket.on('error_msg', (m) => alert(m));
+  socket.on('room_activity', ({ roomId, fromUserId }) => {
+    if (fromUserId === me.id) return;
+    if (roomId === currentRoomId) return;
+    unreadCounts.set(roomId, (unreadCounts.get(roomId) || 0) + 1);
+    renderBadges();
+  });
 
   await loadRooms();
 })();

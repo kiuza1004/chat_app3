@@ -30,11 +30,23 @@ button:disabled { background: #aab; cursor: not-allowed; }
 .room-create input { flex: 1; min-width: 0; background: #2c3142; color: #fff; border-color: #3a4054; }
 .room-create button { padding: 8px 12px; font-size: 13px; flex-shrink: 0; }
 .room-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
-.room-list li { padding: 9px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.room-list li {
+  padding: 9px 12px; border-radius: 6px; cursor: pointer; font-size: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
 .room-list li:hover { background: #2c3142; }
 .room-list li.active { background: #4a7bff; color: #fff; }
+.room-list li .room-info { flex: 1; min-width: 0; }
 .room-list li small { display: block; color: #8b91a0; font-size: 11px; margin-top: 2px; }
 .room-list li.active small { color: #d8e1ff; }
+.room-list li .badge {
+  flex-shrink: 0;
+  background: #ff5252; color: #fff;
+  font-size: 11px; font-weight: 700;
+  padding: 2px 7px; border-radius: 10px;
+  min-width: 20px; text-align: center;
+}
+.room-list li.active .badge { background: #fff; color: #4a7bff; }
 
 .sidebar-backdrop { display: none; }
 .mobile-only { display: none; }

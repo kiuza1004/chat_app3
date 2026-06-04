@@ -90,7 +90,10 @@ app.get('/api/me', (req, res) => {
 });
 
 app.get('/api/rooms', requireAuth, (req, res) => {
-  res.json(db.listRooms());
+  const rooms = db.listRooms();
+  const userId = req.session.userId;
+  rooms.forEach((r) => { r.unread_count = db.countUnread(userId, r.id); });
+  res.json(rooms);
 });
 
 app.post('/api/rooms', requireAuth, (req, res) => {
@@ -148,9 +151,13 @@ io.on('connection', (socket) => {
     const room = db.findRoomById(id);
     if (!room) return socket.emit('error_msg', '존재하지 않는 방입니다');
 
-    if (currentRoom) socket.leave(`room:${currentRoom}`);
+    if (currentRoom) {
+      db.markRoomRead(userId, currentRoom);
+      socket.leave(`room:${currentRoom}`);
+    }
     currentRoom = id;
     socket.join(`room:${id}`);
+    db.markRoomRead(userId, id);
     socket.emit('joined', { roomId: id, name: room.name });
   });
 
@@ -188,6 +195,11 @@ io.on('connection', (socket) => {
       attachment: msg.attachment,
       created_at: msg.created_at,
     });
+    io.emit('room_activity', { roomId: currentRoom, fromUserId: userId });
+  });
+
+  socket.on('disconnect', () => {
+    if (currentRoom) db.markRoomRead(userId, currentRoom);
   });
 });
 
