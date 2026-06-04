@@ -1,7 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const DB_PATH = path.join(__dirname, 'chat-data.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_PATH = path.join(DATA_DIR, 'chat-data.json');
 
 const defaultData = {
   users: [],
@@ -84,15 +86,24 @@ module.exports = {
     return data.messages
       .filter((m) => m.room_id === roomId)
       .slice(-limit)
-      .map((m) => ({ id: m.id, username: m.username, content: m.content, created_at: m.created_at }));
+      .map((m) => ({
+        id: m.id,
+        username: m.username,
+        content: m.content,
+        type: m.type || 'text',
+        attachment: m.attachment || null,
+        created_at: m.created_at,
+      }));
   },
-  createMessage(roomId, userId, username, content) {
+  createMessage(roomId, userId, username, content, attachment = null) {
     const msg = {
       id: data.nextMessageId++,
       room_id: roomId,
       user_id: userId,
       username,
       content,
+      type: attachment ? attachment.kind : 'text',
+      attachment,
       created_at: Date.now(),
     };
     data.messages.push(msg);

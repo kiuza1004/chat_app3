@@ -1,0 +1,8 @@
+node_modules
+npm-debug.log
+chat-data.json
+.git
+.gitignore
+.env
+README.md
+uploads
