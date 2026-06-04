@@ -6,11 +6,17 @@
 
   const socket = io({ withCredentials: true });
   let currentRoomId = null;
+  let pendingAttachment = null;
 
   const roomListEl = document.getElementById('room-list');
   const messagesEl = document.getElementById('messages');
   const msgInput = document.getElementById('msg-input');
   const sendBtn = document.getElementById('send-btn');
+  const fileBtn = document.getElementById('file-btn');
+  const fileInput = document.getElementById('file-input');
+  const attachPreview = document.getElementById('attachment-preview');
+  const attachName = document.getElementById('attachment-name');
+  const attachCancel = document.getElementById('attachment-cancel');
   const roomNameEl = document.getElementById('room-name');
   const appEl = document.getElementById('app');
 
@@ -25,16 +31,65 @@
     return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   }
 
+  function fmtSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
   function appendMessage(m) {
     const li = document.createElement('li');
     li.className = 'msg' + (m.username === me.username ? ' me' : '');
+
     const meta = document.createElement('div');
     meta.className = 'meta';
     meta.textContent = `${m.username} · ${fmtTime(m.created_at)}`;
-    const body = document.createElement('div');
-    body.textContent = m.content;
     li.appendChild(meta);
-    li.appendChild(body);
+
+    if (m.content) {
+      const body = document.createElement('div');
+      body.textContent = m.content;
+      li.appendChild(body);
+    }
+
+    if (m.attachment) {
+      if (m.attachment.kind === 'image') {
+        const img = document.createElement('img');
+        img.className = 'msg-image';
+        img.src = m.attachment.url;
+        img.alt = m.attachment.name || 'image';
+        img.loading = 'lazy';
+        img.addEventListener('click', () => window.open(m.attachment.url, '_blank'));
+        li.appendChild(img);
+      } else {
+        const a = document.createElement('a');
+        a.className = 'msg-file';
+        a.href = m.attachment.url;
+        a.download = m.attachment.name || '';
+        a.target = '_blank';
+        a.rel = 'noopener';
+
+        const icon = document.createElement('span');
+        icon.className = 'msg-file-icon';
+        icon.textContent = '📄';
+
+        const metaWrap = document.createElement('span');
+        metaWrap.className = 'msg-file-meta';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'msg-file-name';
+        nameEl.textContent = m.attachment.name || 'file';
+        const sizeEl = document.createElement('span');
+        sizeEl.className = 'msg-file-size';
+        sizeEl.textContent = fmtSize(m.attachment.size || 0);
+        metaWrap.appendChild(nameEl);
+        metaWrap.appendChild(sizeEl);
+
+        a.appendChild(icon);
+        a.appendChild(metaWrap);
+        li.appendChild(a);
+      }
+    }
+
     messagesEl.appendChild(li);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -63,6 +118,7 @@
     currentRoomId = id;
     roomNameEl.textContent = name;
     messagesEl.innerHTML = '';
+    clearAttachment();
     document.querySelectorAll('#room-list li').forEach((el) => {
       el.classList.toggle('active', parseInt(el.dataset.roomId, 10) === id);
     });
@@ -76,8 +132,50 @@
     socket.emit('join', id);
     msgInput.disabled = false;
     sendBtn.disabled = false;
+    fileBtn.disabled = false;
     closeSidebar();
   }
+
+  function clearAttachment() {
+    pendingAttachment = null;
+    attachPreview.hidden = true;
+    attachName.textContent = '';
+    fileInput.value = '';
+  }
+
+  fileBtn.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('파일이 너무 큽니다 (최대 10MB)');
+      fileInput.value = '';
+      return;
+    }
+
+    fileBtn.disabled = true;
+    attachPreview.hidden = false;
+    attachName.textContent = `업로드 중… ${file.name}`;
+
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '업로드 실패');
+
+      pendingAttachment = data;
+      attachName.textContent = `📎 ${data.name} (${fmtSize(data.size)})`;
+    } catch (err) {
+      alert(err.message);
+      clearAttachment();
+    } finally {
+      fileBtn.disabled = false;
+    }
+  });
+
+  attachCancel.addEventListener('click', clearAttachment);
 
   document.getElementById('create-room').addEventListener('click', async () => {
     const input = document.getElementById('new-room');
@@ -102,9 +200,12 @@
   document.getElementById('send-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const text = msgInput.value.trim();
-    if (!text || !currentRoomId) return;
-    socket.emit('message', text);
+    if (!currentRoomId) return;
+    if (!text && !pendingAttachment) return;
+
+    socket.emit('message', { content: text, attachment: pendingAttachment });
     msgInput.value = '';
+    clearAttachment();
   });
 
   document.getElementById('logout-btn').addEventListener('click', async () => {

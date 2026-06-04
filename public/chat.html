@@ -33,7 +33,13 @@
         <h2 id="room-name">채팅방을 선택하세요</h2>
       </header>
       <ul id="messages" class="messages"></ul>
+      <div id="attachment-preview" class="attachment-preview" hidden>
+        <span id="attachment-name"></span>
+        <button id="attachment-cancel" type="button" class="icon-btn" aria-label="첨부 취소">✕</button>
+      </div>
       <form id="send-form" class="send-form">
+        <input id="file-input" type="file" hidden />
+        <button id="file-btn" type="button" class="icon-btn" aria-label="파일 첨부" disabled>📎</button>
         <input id="msg-input" type="text" placeholder="메시지를 입력하세요" autocomplete="off" maxlength="1000" disabled />
         <button id="send-btn" type="submit" disabled>전송</button>
       </form>

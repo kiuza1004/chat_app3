@@ -1,17 +1,35 @@
 const express = require('express');
 const session = require('express-session');
 const http = require('http');
+const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
 const { Server } = require('socket.io');
 const db = require('./db');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, { maxHttpBufferSize: 1e7 });
 
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-prod';
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).slice(0, 10).replace(/[^.\w]/g, '');
+    cb(null, crypto.randomBytes(16).toString('hex') + ext);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const sessionMiddleware = session({
   secret: SESSION_SECRET,
@@ -23,6 +41,7 @@ const sessionMiddleware = session({
 app.use(express.json());
 app.use(sessionMiddleware);
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
 io.engine.use(sessionMiddleware);
 
@@ -91,6 +110,26 @@ app.get('/api/rooms/:id/messages', requireAuth, (req, res) => {
   res.json(db.listMessages(roomId));
 });
 
+app.post('/api/upload', requireAuth, (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: '파일이 너무 큽니다 (최대 10MB)' });
+      return res.status(400).json({ error: err.message || '업로드 실패' });
+    }
+    if (!req.file) return res.status(400).json({ error: '파일이 없습니다' });
+
+    const mime = req.file.mimetype || 'application/octet-stream';
+    const isImage = mime.startsWith('image/');
+    res.json({
+      kind: isImage ? 'image' : 'file',
+      url: `/uploads/${req.file.filename}`,
+      name: req.file.originalname,
+      size: req.file.size,
+      mime,
+    });
+  });
+});
+
 io.on('connection', (socket) => {
   const sess = socket.request.session;
   if (!sess || !sess.userId) {
@@ -115,17 +154,38 @@ io.on('connection', (socket) => {
     socket.emit('joined', { roomId: id, name: room.name });
   });
 
-  socket.on('message', (content) => {
+  socket.on('message', (payload) => {
     if (!currentRoom) return;
-    if (typeof content !== 'string') return;
-    const text = content.trim().slice(0, 1000);
-    if (!text) return;
 
-    const msg = db.createMessage(currentRoom, userId, username, text);
+    let text = '';
+    let attachment = null;
+
+    if (typeof payload === 'string') {
+      text = payload.trim().slice(0, 1000);
+    } else if (payload && typeof payload === 'object') {
+      if (typeof payload.content === 'string') text = payload.content.trim().slice(0, 1000);
+      if (payload.attachment && typeof payload.attachment === 'object') {
+        const a = payload.attachment;
+        if (typeof a.url === 'string' && a.url.startsWith('/uploads/')) {
+          attachment = {
+            kind: a.kind === 'image' ? 'image' : 'file',
+            url: a.url,
+            name: String(a.name || 'file').slice(0, 200),
+            size: Number.isFinite(a.size) ? a.size : 0,
+            mime: String(a.mime || '').slice(0, 100),
+          };
+        }
+      }
+    }
+    if (!text && !attachment) return;
+
+    const msg = db.createMessage(currentRoom, userId, username, text, attachment);
     io.to(`room:${currentRoom}`).emit('message', {
       id: msg.id,
       username: msg.username,
       content: msg.content,
+      type: msg.type,
+      attachment: msg.attachment,
       created_at: msg.created_at,
     });
   });
