@@ -12,6 +12,13 @@
   const msgInput = document.getElementById('msg-input');
   const sendBtn = document.getElementById('send-btn');
   const roomNameEl = document.getElementById('room-name');
+  const appEl = document.getElementById('app');
+
+  const openSidebar = () => appEl.classList.add('show-sidebar');
+  const closeSidebar = () => appEl.classList.remove('show-sidebar');
+  document.getElementById('open-sidebar').addEventListener('click', openSidebar);
+  document.getElementById('close-sidebar').addEventListener('click', closeSidebar);
+  document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
 
   function fmtTime(ts) {
     const d = new Date(ts);
@@ -69,7 +76,7 @@
     socket.emit('join', id);
     msgInput.disabled = false;
     sendBtn.disabled = false;
-    msgInput.focus();
+    closeSidebar();
   }
 
   document.getElementById('create-room').addEventListener('click', async () => {
