@@ -11,6 +11,7 @@ const defaultData = {
   rooms: [],
   messages: [],
   roomReads: [],
+  roomMembers: [],
   nextUserId: 1,
   nextRoomId: 1,
   nextMessageId: 1,
@@ -25,8 +26,9 @@ function load() {
       const loaded = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
       data = { ...structuredClone(defaultData), ...loaded };
       if (!Array.isArray(data.roomReads)) data.roomReads = [];
-      // Backfill username_lower for legacy users
+      if (!Array.isArray(data.roomMembers)) data.roomMembers = [];
       data.users.forEach((u) => { if (!u.username_lower) u.username_lower = u.username.toLowerCase(); });
+      data.rooms.forEach((r) => { if (!r.visibility) r.visibility = 'public'; });
     } catch {
       data = structuredClone(defaultData);
     }
@@ -76,11 +78,16 @@ module.exports = {
   },
 
   // Rooms
-  listRooms() {
+  listRoomsForUser(userId) {
     return data.rooms
+      .filter((r) => r.visibility !== 'private' || this.isMember(r.id, userId))
       .map((r) => {
         const creator = data.users.find((u) => u.id === r.created_by);
-        return { ...r, created_by_name: creator ? creator.username : 'unknown' };
+        return {
+          ...r,
+          visibility: r.visibility || 'public',
+          created_by_name: creator ? creator.username : 'unknown',
+        };
       })
       .sort((a, b) => b.created_at - a.created_at);
   },
@@ -91,11 +98,61 @@ module.exports = {
   findRoomById(id) {
     return data.rooms.find((r) => r.id === id);
   },
-  createRoom(name, createdBy) {
-    const room = { id: data.nextRoomId++, name, created_by: createdBy, created_at: Date.now() };
+  createRoom(name, createdBy, visibility = 'public') {
+    const room = {
+      id: data.nextRoomId++,
+      name,
+      created_by: createdBy,
+      visibility: visibility === 'private' ? 'private' : 'public',
+      created_at: Date.now(),
+    };
     data.rooms.push(room);
+    if (room.visibility === 'private') {
+      data.roomMembers.push({
+        room_id: room.id,
+        user_id: createdBy,
+        role: 'admin',
+        joined_at: Date.now(),
+      });
+    }
     save();
     return room;
+  },
+
+  // Room members (private rooms only)
+  isMember(roomId, userId) {
+    return data.roomMembers.some((m) => m.room_id === roomId && m.user_id === userId);
+  },
+  getMember(roomId, userId) {
+    return data.roomMembers.find((m) => m.room_id === roomId && m.user_id === userId);
+  },
+  listMembers(roomId) {
+    return data.roomMembers
+      .filter((m) => m.room_id === roomId)
+      .map((m) => {
+        const u = data.users.find((x) => x.id === m.user_id);
+        return {
+          user_id: m.user_id,
+          username: u ? u.username : 'unknown',
+          role: m.role,
+          joined_at: m.joined_at,
+        };
+      })
+      .sort((a, b) => a.joined_at - b.joined_at);
+  },
+  addMember(roomId, userId, role = 'member') {
+    if (this.isMember(roomId, userId)) return { error: '이미 멤버입니다' };
+    const m = { room_id: roomId, user_id: userId, role, joined_at: Date.now() };
+    data.roomMembers.push(m);
+    save();
+    return { member: m };
+  },
+  removeMember(roomId, userId) {
+    const idx = data.roomMembers.findIndex((m) => m.room_id === roomId && m.user_id === userId);
+    if (idx < 0) return false;
+    data.roomMembers.splice(idx, 1);
+    save();
+    return true;
   },
 
   // Messages

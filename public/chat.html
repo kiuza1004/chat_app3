@@ -25,6 +25,10 @@
         <input id="new-room" type="text" placeholder="새 채팅방 이름" maxlength="40" />
         <button id="create-room">생성</button>
       </div>
+      <label class="vis-toggle">
+        <input type="checkbox" id="new-room-private" />
+        <span>🔒 비공개방으로 생성</span>
+      </label>
 
       <h3>채팅방</h3>
       <ul id="room-list" class="room-list"></ul>
@@ -35,6 +39,7 @@
       <header class="chat-header">
         <button id="open-sidebar" class="icon-btn mobile-only" aria-label="채팅방 목록 열기">☰</button>
         <h2 id="room-name">채팅방을 선택하세요</h2>
+        <button id="members-btn" class="icon-btn" aria-label="멤버 보기" hidden>👥</button>
       </header>
       <div id="messages-wrap" class="messages-wrap">
         <button id="load-more-btn" class="load-more" hidden>옛 메시지 불러오기</button>
@@ -57,6 +62,25 @@
         <button id="send-btn" type="submit" disabled>전송</button>
       </form>
     </section>
+  </div>
+
+  <div id="member-modal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>멤버 관리</h3>
+        <button id="member-close" class="icon-btn" aria-label="닫기">✕</button>
+      </div>
+      <div id="invite-row" class="invite-row" hidden>
+        <input id="invite-username" type="text" placeholder="초대할 아이디" maxlength="20" />
+        <button id="invite-btn">초대</button>
+      </div>
+      <div id="invite-error" class="error"></div>
+      <ul id="member-list" class="member-list"></ul>
+      <div class="modal-foot">
+        <button id="leave-room-btn" class="ghost-danger" hidden>방 나가기</button>
+      </div>
+    </div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>

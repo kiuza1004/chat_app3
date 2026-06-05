@@ -119,38 +119,118 @@ app.get('/api/me', (req, res) => {
 });
 
 app.get('/api/rooms', requireAuth, (req, res) => {
-  const rooms = db.listRooms();
   const userId = req.session.userId;
+  const rooms = db.listRoomsForUser(userId);
   rooms.forEach((r) => { r.unread_count = db.countUnread(userId, r.id); });
   res.json(rooms);
 });
 
 app.post('/api/rooms', requireAuth, (req, res) => {
-  const { name } = req.body || {};
+  const { name, visibility } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: '방 이름을 입력하세요' });
   const trimmed = name.trim().slice(0, 40);
+  const vis = visibility === 'private' ? 'private' : 'public';
 
   if (db.findRoomByName(trimmed)) return res.status(409).json({ error: '이미 존재하는 방 이름입니다' });
 
-  const room = db.createRoom(trimmed, req.session.userId);
-  io.emit('room_created', {
+  const room = db.createRoom(trimmed, req.session.userId, vis);
+  const payload = {
     id: room.id,
     name: room.name,
+    visibility: room.visibility,
     created_by: room.created_by,
     created_by_name: req.session.username,
     created_at: room.created_at,
-  });
-  res.json({ id: room.id, name: room.name });
+  };
+  if (vis === 'public') {
+    io.emit('room_created', payload);
+  } else {
+    io.to(`user:${req.session.userId}`).emit('room_created', payload);
+  }
+  res.json({ id: room.id, name: room.name, visibility: room.visibility });
 });
+
+function canAccessRoom(room, userId) {
+  if (!room) return false;
+  if (room.visibility !== 'private') return true;
+  return db.isMember(room.id, userId);
+}
 
 app.get('/api/rooms/:id/messages', requireAuth, (req, res) => {
   const roomId = parseInt(req.params.id, 10);
   if (!Number.isInteger(roomId)) return res.status(400).json({ error: 'invalid room id' });
+  const room = db.findRoomById(roomId);
+  if (!canAccessRoom(room, req.session.userId)) return res.status(404).json({ error: '방을 찾을 수 없습니다' });
   const beforeId = req.query.before ? parseInt(req.query.before, 10) : null;
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
   const messages = db.listMessages(roomId, { beforeId, limit });
   const hasMore = messages.length > 0 ? db.hasOlderMessages(roomId, messages[0].id) : false;
   res.json({ messages, has_more: hasMore });
+});
+
+app.get('/api/rooms/:id/members', requireAuth, (req, res) => {
+  const roomId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(roomId)) return res.status(400).json({ error: 'invalid room id' });
+  const room = db.findRoomById(roomId);
+  if (!room || room.visibility !== 'private') return res.status(404).json({ error: '비공개방이 아닙니다' });
+  if (!db.isMember(roomId, req.session.userId)) return res.status(403).json({ error: '권한이 없습니다' });
+  res.json(db.listMembers(roomId));
+});
+
+app.post('/api/rooms/:id/invite', requireAuth, (req, res) => {
+  const roomId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(roomId)) return res.status(400).json({ error: 'invalid room id' });
+  const room = db.findRoomById(roomId);
+  if (!room || room.visibility !== 'private') return res.status(404).json({ error: '비공개방이 아닙니다' });
+  const me = db.getMember(roomId, req.session.userId);
+  if (!me || me.role !== 'admin') return res.status(403).json({ error: '관리자만 초대할 수 있습니다' });
+
+  const username = String((req.body && req.body.username) || '').trim();
+  if (!username) return res.status(400).json({ error: '아이디를 입력하세요' });
+  const target = db.findUserByName(username);
+  if (!target) return res.status(404).json({ error: '존재하지 않는 사용자입니다' });
+
+  const result = db.addMember(roomId, target.id);
+  if (result.error) return res.status(409).json({ error: result.error });
+
+  io.to(`user:${target.id}`).emit('room_added', {
+    id: room.id,
+    name: room.name,
+    visibility: room.visibility,
+    created_by: room.created_by,
+    created_by_name: db.findUserById(room.created_by)?.username || 'unknown',
+    created_at: room.created_at,
+  });
+  io.to(`room:${roomId}`).emit('member_added', {
+    room_id: roomId,
+    user_id: target.id,
+    username: target.username,
+    role: 'member',
+  });
+  res.json({ user_id: target.id, username: target.username, role: 'member' });
+});
+
+app.delete('/api/rooms/:id/members/:userId', requireAuth, (req, res) => {
+  const roomId = parseInt(req.params.id, 10);
+  const targetId = parseInt(req.params.userId, 10);
+  if (!Number.isInteger(roomId) || !Number.isInteger(targetId)) return res.status(400).json({ error: 'invalid id' });
+  const room = db.findRoomById(roomId);
+  if (!room || room.visibility !== 'private') return res.status(404).json({ error: '비공개방이 아닙니다' });
+
+  const me = db.getMember(roomId, req.session.userId);
+  if (!me) return res.status(403).json({ error: '멤버가 아닙니다' });
+  const isSelf = targetId === req.session.userId;
+  if (!isSelf && me.role !== 'admin') return res.status(403).json({ error: '관리자만 강퇴할 수 있습니다' });
+
+  const target = db.getMember(roomId, targetId);
+  if (!target) return res.status(404).json({ error: '해당 멤버가 없습니다' });
+  if (target.role === 'admin' && !isSelf) return res.status(400).json({ error: '관리자는 강퇴할 수 없습니다' });
+
+  db.removeMember(roomId, targetId);
+  io.to(`user:${targetId}`).emit('room_removed', { room_id: roomId, kicked: !isSelf });
+  io.in(`user:${targetId}`).socketsLeave(`room:${roomId}`);
+  io.to(`room:${roomId}`).emit('member_removed', { room_id: roomId, user_id: targetId });
+  res.json({ ok: true });
 });
 
 app.post('/api/upload', requireAuth, uploadLimiter, (req, res) => {
@@ -203,6 +283,8 @@ io.on('connection', (socket) => {
   let currentRoom = null;
   const recentMsgTimes = [];
 
+  socket.join(`user:${userId}`);
+
   const wasOffline = !onlineUsers.has(userId);
   const entry = onlineUsers.get(userId) || { id: userId, username, count: 0 };
   entry.count++;
@@ -216,6 +298,9 @@ io.on('connection', (socket) => {
 
     const room = db.findRoomById(id);
     if (!room) return socket.emit('error_msg', '존재하지 않는 방입니다');
+    if (room.visibility === 'private' && !db.isMember(id, userId)) {
+      return socket.emit('error_msg', '입장 권한이 없습니다');
+    }
 
     if (currentRoom) {
       db.markRoomRead(userId, currentRoom);

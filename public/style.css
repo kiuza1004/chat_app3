@@ -51,6 +51,10 @@ button:disabled { background: #aab; cursor: not-allowed; }
 .room-create { display: flex; gap: 6px; }
 .room-create input { flex: 1; min-width: 0; background: #2c3142; color: #fff; border-color: #3a4054; }
 .room-create button { padding: 8px 12px; font-size: 13px; flex-shrink: 0; }
+.vis-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #c5cad6; cursor: pointer; padding: 2px 4px; user-select: none; }
+.vis-toggle input { width: 14px; height: 14px; accent-color: #4a7bff; }
+
+.room-lock { font-size: 11px; opacity: 0.7; margin-left: 4px; }
 .room-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
 .room-list li {
   padding: 9px 12px; border-radius: 6px; cursor: pointer; font-size: 14px;
@@ -77,7 +81,8 @@ button:disabled { background: #aab; cursor: not-allowed; }
 /* ===== Chat panel ===== */
 .chat { display: flex; flex-direction: column; background: #fff; min-width: 0; }
 .chat-header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #e6e8ec; }
-.chat-header h2 { margin: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-header h2 { margin: 0; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.chat-header #members-btn { font-size: 18px; }
 .messages-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
 .messages { flex: 1; list-style: none; padding: 16px 20px; margin: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .msg { max-width: 70%; padding: 8px 12px; border-radius: 12px; background: #eef0f3; word-wrap: break-word; overflow-wrap: anywhere; position: relative; }
@@ -233,3 +238,36 @@ button:disabled { background: #aab; cursor: not-allowed; }
   .send-form { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .sidebar { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 }
+
+/* ===== Member modal ===== */
+.modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; }
+.modal[hidden] { display: none; }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+.modal-card {
+  position: relative; background: #fff; border-radius: 12px;
+  width: min(420px, 92vw); max-height: 80vh; overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.2);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #eef0f3; }
+.modal-head h3 { margin: 0; font-size: 16px; }
+.invite-row { display: flex; gap: 6px; padding: 12px 16px 4px; }
+.invite-row input { flex: 1; }
+.invite-row button { flex-shrink: 0; padding: 10px 14px; font-size: 13px; }
+.modal-card .error { padding: 0 16px; min-height: 0; }
+.modal-card .error:not(:empty) { padding: 4px 16px 0; min-height: 18px; }
+.member-list { list-style: none; padding: 8px 0; margin: 0; overflow-y: auto; flex: 1; min-height: 60px; }
+.member-list li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; font-size: 14px;
+}
+.member-list li .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-list li .role-tag { font-size: 11px; color: #4a7bff; background: #eef4ff; padding: 2px 8px; border-radius: 10px; }
+.member-list li button.kick {
+  background: transparent; color: #d33; border: 1px solid #f3c2c2;
+  padding: 3px 8px; font-size: 12px;
+}
+.member-list li button.kick:hover { background: #fff0f0; }
+.modal-foot { padding: 10px 16px 14px; border-top: 1px solid #eef0f3; display: flex; justify-content: flex-end; }
+.ghost-danger { background: transparent; color: #d33; border: 1px solid #f3c2c2; padding: 7px 12px; font-size: 13px; }
+.ghost-danger:hover { background: #fff0f0; }

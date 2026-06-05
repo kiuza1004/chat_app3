@@ -11,10 +11,22 @@
   let hasMoreOlder = false;
   let loadingOlder = false;
   const unreadCounts = new Map();
+  const roomsById = new Map();
   const baseTitle = 'Simple Chat';
 
+  let currentRoomMeta = null; // { id, name, visibility, created_by }
   const roomListEl = document.getElementById('room-list');
   const roomEmptyEl = document.getElementById('room-empty');
+  const membersBtn = document.getElementById('members-btn');
+  const memberModal = document.getElementById('member-modal');
+  const memberListEl = document.getElementById('member-list');
+  const memberCloseBtn = document.getElementById('member-close');
+  const inviteRow = document.getElementById('invite-row');
+  const inviteInput = document.getElementById('invite-username');
+  const inviteBtn = document.getElementById('invite-btn');
+  const inviteErrEl = document.getElementById('invite-error');
+  const leaveBtn = document.getElementById('leave-room-btn');
+  const newRoomPrivate = document.getElementById('new-room-private');
   const messagesEl = document.getElementById('messages');
   const chatEmptyEl = document.getElementById('chat-empty');
   const loadMoreBtn = document.getElementById('load-more-btn');
@@ -292,6 +304,7 @@
     roomListEl.innerHTML = '';
     rooms.forEach((r) => {
       unreadCounts.set(r.id, r.unread_count || 0);
+      roomsById.set(r.id, r);
       roomListEl.appendChild(buildRoomLi(r));
     });
     renderBadges();
@@ -306,18 +319,27 @@
     info.className = 'room-info';
     const name = document.createElement('div');
     name.textContent = r.name;
+    if (r.visibility === 'private') {
+      const lock = document.createElement('span');
+      lock.className = 'room-lock';
+      lock.textContent = '🔒';
+      lock.title = '비공개방';
+      name.appendChild(lock);
+    }
     const sub = document.createElement('small');
     sub.textContent = `by ${r.created_by_name}`;
     info.appendChild(name);
     info.appendChild(sub);
     li.appendChild(info);
-    li.addEventListener('click', () => joinRoom(r.id, r.name));
+    li.addEventListener('click', () => joinRoom(r.id, r.name, r));
     return li;
   }
 
-  async function joinRoom(id, name) {
+  async function joinRoom(id, name, meta) {
     currentRoomId = id;
+    currentRoomMeta = meta || roomsById.get(id) || { id, name, visibility: 'public' };
     roomNameEl.textContent = name;
+    membersBtn.hidden = currentRoomMeta.visibility !== 'private';
     messagesEl.innerHTML = '';
     oldestMessageId = null;
     hasMoreOlder = false;
@@ -354,6 +376,116 @@
     fileBtn.disabled = false;
     closeSidebar();
   }
+
+  function closeMemberModal() {
+    memberModal.hidden = true;
+    inviteErrEl.textContent = '';
+    inviteInput.value = '';
+  }
+
+  async function openMemberModal() {
+    if (!currentRoomMeta || currentRoomMeta.visibility !== 'private') return;
+    memberModal.hidden = false;
+    memberListEl.innerHTML = '';
+    inviteErrEl.textContent = '';
+    inviteRow.hidden = true;
+    leaveBtn.hidden = true;
+    try {
+      const res = await fetch(`/api/rooms/${currentRoomId}/members`);
+      if (!res.ok) { inviteErrEl.textContent = '멤버 목록을 불러올 수 없습니다'; return; }
+      const members = await res.json();
+      const myRole = (members.find((m) => m.user_id === me.id) || {}).role;
+      inviteRow.hidden = myRole !== 'admin';
+      leaveBtn.hidden = !myRole || myRole === 'admin';
+      renderMembers(members, myRole);
+    } catch {
+      inviteErrEl.textContent = '네트워크 오류';
+    }
+  }
+
+  function renderMembers(members, myRole) {
+    memberListEl.innerHTML = '';
+    members.forEach((m) => {
+      const li = document.createElement('li');
+      const av = document.createElement('div');
+      av.className = 'avatar';
+      av.style.background = avatarColor(m.username);
+      av.textContent = (m.username[0] || '?').toUpperCase();
+      li.appendChild(av);
+
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = m.username + (m.user_id === me.id ? ' (나)' : '');
+      li.appendChild(name);
+
+      if (m.role === 'admin') {
+        const tag = document.createElement('span');
+        tag.className = 'role-tag';
+        tag.textContent = '관리자';
+        li.appendChild(tag);
+      }
+
+      if (myRole === 'admin' && m.role !== 'admin' && m.user_id !== me.id) {
+        const btn = document.createElement('button');
+        btn.className = 'kick';
+        btn.textContent = '강퇴';
+        btn.addEventListener('click', () => kickMember(m.user_id, m.username));
+        li.appendChild(btn);
+      }
+
+      memberListEl.appendChild(li);
+    });
+  }
+
+  async function kickMember(userId, username) {
+    if (!confirm(`${username} 님을 강퇴할까요?`)) return;
+    const res = await fetch(`/api/rooms/${currentRoomId}/members/${userId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      inviteErrEl.textContent = data.error || '강퇴 실패';
+      return;
+    }
+    openMemberModal();
+  }
+
+  async function inviteUser() {
+    const username = inviteInput.value.trim();
+    if (!username) return;
+    inviteErrEl.textContent = '';
+    inviteBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/rooms/${currentRoomId}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+      const data = await res.json();
+      if (!res.ok) { inviteErrEl.textContent = data.error || '초대 실패'; return; }
+      inviteInput.value = '';
+      openMemberModal();
+    } finally {
+      inviteBtn.disabled = false;
+    }
+  }
+
+  async function leaveRoom() {
+    if (!currentRoomMeta || currentRoomMeta.visibility !== 'private') return;
+    if (!confirm('방에서 나갈까요?')) return;
+    const res = await fetch(`/api/rooms/${currentRoomId}/members/${me.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || '나가기 실패');
+      return;
+    }
+    closeMemberModal();
+  }
+
+  membersBtn.addEventListener('click', openMemberModal);
+  memberCloseBtn.addEventListener('click', closeMemberModal);
+  memberModal.querySelector('.modal-backdrop').addEventListener('click', closeMemberModal);
+  inviteBtn.addEventListener('click', inviteUser);
+  inviteInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inviteUser(); } });
+  leaveBtn.addEventListener('click', leaveRoom);
 
   loadMoreBtn.addEventListener('click', async () => {
     if (loadingOlder || !currentRoomId || oldestMessageId == null) return;
@@ -427,16 +559,18 @@
     const input = document.getElementById('new-room');
     const name = input.value.trim();
     if (!name) return;
+    const visibility = newRoomPrivate.checked ? 'private' : 'public';
     const res = await fetch('/api/rooms', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, visibility }),
     });
     const data = await res.json();
     if (!res.ok) { alert(data.error || '방 생성 실패'); return; }
     input.value = '';
+    newRoomPrivate.checked = false;
     await loadRooms();
-    joinRoom(data.id, data.name);
+    joinRoom(data.id, data.name, roomsById.get(data.id));
   });
 
   document.getElementById('new-room').addEventListener('keydown', (e) => {
@@ -543,10 +677,48 @@
   });
 
   socket.on('room_created', (room) => {
+    roomsById.set(room.id, room);
     if (document.querySelector(`#room-list li[data-room-id="${room.id}"]`)) return;
     if (room.created_by !== me.id) unreadCounts.set(room.id, 0);
     roomListEl.prepend(buildRoomLi(room));
     renderRoomEmpty();
+  });
+
+  socket.on('member_added', ({ room_id }) => {
+    if (!memberModal.hidden && room_id === currentRoomId) openMemberModal();
+  });
+  socket.on('member_removed', ({ room_id }) => {
+    if (!memberModal.hidden && room_id === currentRoomId) openMemberModal();
+  });
+
+  socket.on('room_added', (room) => {
+    roomsById.set(room.id, room);
+    if (document.querySelector(`#room-list li[data-room-id="${room.id}"]`)) return;
+    unreadCounts.set(room.id, 0);
+    roomListEl.prepend(buildRoomLi(room));
+    renderRoomEmpty();
+  });
+
+  socket.on('room_removed', ({ room_id, kicked }) => {
+    roomsById.delete(room_id);
+    unreadCounts.delete(room_id);
+    const li = roomListEl.querySelector(`li[data-room-id="${room_id}"]`);
+    if (li) li.remove();
+    renderBadges();
+    renderRoomEmpty();
+    if (currentRoomId === room_id) {
+      currentRoomId = null;
+      currentRoomMeta = null;
+      roomNameEl.textContent = '채팅방을 선택하세요';
+      messagesEl.innerHTML = '';
+      chatEmptyEl.hidden = false;
+      membersBtn.hidden = true;
+      msgInput.disabled = true;
+      sendBtn.disabled = true;
+      fileBtn.disabled = true;
+      closeMemberModal();
+      if (kicked) alert('방에서 강퇴되었습니다');
+    }
   });
 
   const presenceListEl = document.getElementById('presence-list');
