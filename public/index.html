@@ -19,7 +19,10 @@
 
       <form id="auth-form" autocomplete="off">
         <input id="username" type="text" placeholder="아이디" required minlength="2" maxlength="20" />
-        <input id="password" type="password" placeholder="비밀번호" required minlength="4" />
+        <div class="password-wrap">
+          <input id="password" type="password" placeholder="비밀번호" required minlength="4" />
+          <button type="button" id="toggle-pw" class="pw-toggle" aria-label="비밀번호 표시 전환">👁</button>
+        </div>
         <button id="submit-btn" type="submit">로그인</button>
         <div id="auth-error" class="error"></div>
       </form>
@@ -28,6 +31,11 @@
 
   <script>
     let mode = 'login';
+
+    const pwInput = document.getElementById('password');
+    document.getElementById('toggle-pw').addEventListener('click', () => {
+      pwInput.type = pwInput.type === 'password' ? 'text' : 'password';
+    });
 
     document.querySelectorAll('.tab').forEach((t) => {
       t.addEventListener('click', () => {

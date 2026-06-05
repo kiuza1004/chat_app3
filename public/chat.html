@@ -28,6 +28,7 @@
 
       <h3>채팅방</h3>
       <ul id="room-list" class="room-list"></ul>
+      <div id="room-empty" class="empty-state side-empty">아직 채팅방이 없습니다.<br/>위에서 만들어보세요.</div>
     </aside>
 
     <section class="chat">
@@ -35,7 +36,15 @@
         <button id="open-sidebar" class="icon-btn mobile-only" aria-label="채팅방 목록 열기">☰</button>
         <h2 id="room-name">채팅방을 선택하세요</h2>
       </header>
-      <ul id="messages" class="messages"></ul>
+      <div id="messages-wrap" class="messages-wrap">
+        <button id="load-more-btn" class="load-more" hidden>옛 메시지 불러오기</button>
+        <ul id="messages" class="messages"></ul>
+        <div id="chat-empty" class="empty-state chat-empty">
+          <div class="empty-icon">💬</div>
+          <div>왼쪽에서 채팅방을 선택하세요</div>
+        </div>
+        <button id="scroll-down-btn" class="scroll-down-btn" hidden>새 메시지 ↓</button>
+      </div>
       <div id="typing-indicator" class="typing-indicator"></div>
       <div id="attachment-preview" class="attachment-preview" hidden>
         <span id="attachment-name"></span>

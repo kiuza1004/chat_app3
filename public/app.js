@@ -7,10 +7,18 @@
   const socket = io({ withCredentials: true });
   let currentRoomId = null;
   let pendingAttachment = null;
+  let oldestMessageId = null;
+  let hasMoreOlder = false;
+  let loadingOlder = false;
   const unreadCounts = new Map();
+  const baseTitle = 'Simple Chat';
 
   const roomListEl = document.getElementById('room-list');
+  const roomEmptyEl = document.getElementById('room-empty');
   const messagesEl = document.getElementById('messages');
+  const chatEmptyEl = document.getElementById('chat-empty');
+  const loadMoreBtn = document.getElementById('load-more-btn');
+  const scrollDownBtn = document.getElementById('scroll-down-btn');
   const msgInput = document.getElementById('msg-input');
   const sendBtn = document.getElementById('send-btn');
   const fileBtn = document.getElementById('file-btn');
@@ -28,9 +36,29 @@
   document.getElementById('close-sidebar').addEventListener('click', closeSidebar);
   document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
 
+  // Notification permission
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+
   function fmtTime(ts) {
     const d = new Date(ts);
     return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function fmtDateLabel(ts) {
+    const d = new Date(ts);
+    const today = new Date();
+    const yest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    if (sameDay(d, today)) return '오늘';
+    if (sameDay(d, yest)) return '어제';
+    return d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+  }
+
+  function dayKey(ts) {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
   }
 
   function fmtSize(bytes) {
@@ -39,61 +67,199 @@
     return (bytes / 1024 / 1024).toFixed(2) + ' MB';
   }
 
-  function appendMessage(m) {
+  function avatarColor(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+    const hue = Math.abs(h) % 360;
+    return `hsl(${hue}, 55%, 50%)`;
+  }
+
+  function buildAvatar(username) {
+    const av = document.createElement('div');
+    av.className = 'avatar';
+    av.style.background = avatarColor(username);
+    av.textContent = (username[0] || '?').toUpperCase();
+    return av;
+  }
+
+  function updateTitleBadge() {
+    let total = 0;
+    for (const n of unreadCounts.values()) total += n;
+    document.title = total > 0 ? `(${total > 99 ? '99+' : total}) ${baseTitle}` : baseTitle;
+  }
+
+  function nearBottom() {
+    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+  }
+
+  function buildMessageEl(m) {
     const li = document.createElement('li');
-    li.className = 'msg' + (m.username === me.username ? ' me' : '');
+    li.className = 'msg with-avatar' + (m.user_id === me.id ? ' me' : '') + (m.deleted ? ' deleted' : '');
+    li.dataset.messageId = m.id;
+    li.dataset.userId = m.user_id;
+    li.dataset.day = dayKey(m.created_at);
+
+    li.appendChild(buildAvatar(m.username || '?'));
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `${m.username} · ${fmtTime(m.created_at)}`;
-    li.appendChild(meta);
-
-    if (m.content) {
-      const body = document.createElement('div');
-      body.textContent = m.content;
-      li.appendChild(body);
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = `${m.username} · ${fmtTime(m.created_at)}`;
+    meta.appendChild(nameSpan);
+    if (m.edited_at && !m.deleted) {
+      const ed = document.createElement('span');
+      ed.className = 'edited-tag';
+      ed.textContent = '(수정됨)';
+      meta.appendChild(ed);
     }
+    bubble.appendChild(meta);
 
-    if (m.attachment) {
-      if (m.attachment.kind === 'image') {
-        const img = document.createElement('img');
-        img.className = 'msg-image';
-        img.src = m.attachment.url;
-        img.alt = m.attachment.name || 'image';
-        img.loading = 'lazy';
-        img.addEventListener('click', () => window.open(m.attachment.url, '_blank'));
-        li.appendChild(img);
-      } else {
-        const a = document.createElement('a');
-        a.className = 'msg-file';
-        a.href = m.attachment.url;
-        a.download = m.attachment.name || '';
-        a.target = '_blank';
-        a.rel = 'noopener';
-
-        const icon = document.createElement('span');
-        icon.className = 'msg-file-icon';
-        icon.textContent = '📄';
-
-        const metaWrap = document.createElement('span');
-        metaWrap.className = 'msg-file-meta';
-        const nameEl = document.createElement('span');
-        nameEl.className = 'msg-file-name';
-        nameEl.textContent = m.attachment.name || 'file';
-        const sizeEl = document.createElement('span');
-        sizeEl.className = 'msg-file-size';
-        sizeEl.textContent = fmtSize(m.attachment.size || 0);
-        metaWrap.appendChild(nameEl);
-        metaWrap.appendChild(sizeEl);
-
-        a.appendChild(icon);
-        a.appendChild(metaWrap);
-        li.appendChild(a);
+    if (m.deleted) {
+      const body = document.createElement('div');
+      body.textContent = '삭제된 메시지입니다';
+      bubble.appendChild(body);
+    } else {
+      if (m.content) {
+        const body = document.createElement('div');
+        body.className = 'body';
+        body.textContent = m.content;
+        bubble.appendChild(body);
+      }
+      if (m.attachment) {
+        if (m.attachment.kind === 'image') {
+          const img = document.createElement('img');
+          img.className = 'msg-image';
+          img.src = m.attachment.url;
+          img.alt = m.attachment.name || 'image';
+          img.loading = 'lazy';
+          img.addEventListener('click', () => window.open(m.attachment.url, '_blank'));
+          bubble.appendChild(img);
+        } else {
+          const a = document.createElement('a');
+          a.className = 'msg-file';
+          a.href = m.attachment.url;
+          a.download = m.attachment.name || '';
+          a.target = '_blank';
+          a.rel = 'noopener';
+          const icon = document.createElement('span');
+          icon.className = 'msg-file-icon';
+          icon.textContent = '📄';
+          const metaWrap = document.createElement('span');
+          metaWrap.className = 'msg-file-meta';
+          const nameEl = document.createElement('span');
+          nameEl.className = 'msg-file-name';
+          nameEl.textContent = m.attachment.name || 'file';
+          const sizeEl = document.createElement('span');
+          sizeEl.className = 'msg-file-size';
+          sizeEl.textContent = fmtSize(m.attachment.size || 0);
+          metaWrap.appendChild(nameEl);
+          metaWrap.appendChild(sizeEl);
+          a.appendChild(icon);
+          a.appendChild(metaWrap);
+          bubble.appendChild(a);
+        }
       }
     }
 
-    messagesEl.appendChild(li);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (m.user_id === me.id && !m.deleted) {
+      const actions = document.createElement('div');
+      actions.className = 'msg-actions';
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '수정';
+      editBtn.addEventListener('click', () => {
+        const cur = m.content || '';
+        const next = prompt('메시지 수정', cur);
+        if (next == null) return;
+        const trimmed = next.trim();
+        if (!trimmed || trimmed === cur) return;
+        socket.emit('edit_message', { id: m.id, content: trimmed });
+      });
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '삭제';
+      delBtn.addEventListener('click', () => {
+        if (!confirm('이 메시지를 삭제할까요?')) return;
+        socket.emit('delete_message', { id: m.id });
+      });
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+      bubble.appendChild(actions);
+    }
+
+    li.appendChild(bubble);
+    return li;
+  }
+
+  function buildDateSep(ts) {
+    const sep = document.createElement('li');
+    sep.className = 'date-sep';
+    sep.dataset.day = dayKey(ts);
+    sep.textContent = fmtDateLabel(ts);
+    return sep;
+  }
+
+  function lastDayInList() {
+    for (let i = messagesEl.children.length - 1; i >= 0; i--) {
+      const el = messagesEl.children[i];
+      if (el.dataset.day) return el.dataset.day;
+    }
+    return null;
+  }
+
+  function firstDayInList() {
+    for (let i = 0; i < messagesEl.children.length; i++) {
+      const el = messagesEl.children[i];
+      if (el.dataset.day) return el.dataset.day;
+    }
+    return null;
+  }
+
+  function appendMessage(m) {
+    const wasAtBottom = nearBottom();
+    const lastDay = lastDayInList();
+    const curDay = dayKey(m.created_at);
+    if (lastDay !== curDay) messagesEl.appendChild(buildDateSep(m.created_at));
+    messagesEl.appendChild(buildMessageEl(m));
+    if (oldestMessageId == null || m.id < oldestMessageId) oldestMessageId = m.id;
+
+    if (wasAtBottom || m.user_id === me.id) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollDownBtn.hidden = true;
+    } else {
+      scrollDownBtn.hidden = false;
+    }
+  }
+
+  function prependHistory(messages) {
+    if (!messages.length) return;
+    const prevScrollHeight = messagesEl.scrollHeight;
+    const prevScrollTop = messagesEl.scrollTop;
+    const existingFirstDay = firstDayInList();
+
+    const frag = document.createDocumentFragment();
+    let lastDay = null;
+    messages.forEach((m) => {
+      const d = dayKey(m.created_at);
+      if (d !== lastDay) frag.appendChild(buildDateSep(m.created_at));
+      frag.appendChild(buildMessageEl(m));
+      lastDay = d;
+    });
+
+    if (existingFirstDay && lastDay === existingFirstDay) {
+      const firstEl = messagesEl.firstChild;
+      if (firstEl && firstEl.classList && firstEl.classList.contains('date-sep')) {
+        messagesEl.removeChild(firstEl);
+      }
+    }
+    messagesEl.insertBefore(frag, messagesEl.firstChild);
+
+    if (messages.length) {
+      const minId = messages[0].id;
+      if (oldestMessageId == null || minId < oldestMessageId) oldestMessageId = minId;
+    }
+    messagesEl.scrollTop = prevScrollTop + (messagesEl.scrollHeight - prevScrollHeight);
   }
 
   function renderBadges() {
@@ -112,6 +278,11 @@
         badge.remove();
       }
     });
+    updateTitleBadge();
+  }
+
+  function renderRoomEmpty() {
+    roomEmptyEl.hidden = roomListEl.children.length > 0;
   }
 
   async function loadRooms() {
@@ -121,31 +292,38 @@
     roomListEl.innerHTML = '';
     rooms.forEach((r) => {
       unreadCounts.set(r.id, r.unread_count || 0);
-
-      const li = document.createElement('li');
-      li.dataset.roomId = r.id;
-      if (r.id === currentRoomId) li.classList.add('active');
-
-      const info = document.createElement('div');
-      info.className = 'room-info';
-      const name = document.createElement('div');
-      name.textContent = r.name;
-      const sub = document.createElement('small');
-      sub.textContent = `by ${r.created_by_name}`;
-      info.appendChild(name);
-      info.appendChild(sub);
-      li.appendChild(info);
-
-      li.addEventListener('click', () => joinRoom(r.id, r.name));
-      roomListEl.appendChild(li);
+      roomListEl.appendChild(buildRoomLi(r));
     });
     renderBadges();
+    renderRoomEmpty();
+  }
+
+  function buildRoomLi(r) {
+    const li = document.createElement('li');
+    li.dataset.roomId = r.id;
+    if (r.id === currentRoomId) li.classList.add('active');
+    const info = document.createElement('div');
+    info.className = 'room-info';
+    const name = document.createElement('div');
+    name.textContent = r.name;
+    const sub = document.createElement('small');
+    sub.textContent = `by ${r.created_by_name}`;
+    info.appendChild(name);
+    info.appendChild(sub);
+    li.appendChild(info);
+    li.addEventListener('click', () => joinRoom(r.id, r.name));
+    return li;
   }
 
   async function joinRoom(id, name) {
     currentRoomId = id;
     roomNameEl.textContent = name;
     messagesEl.innerHTML = '';
+    oldestMessageId = null;
+    hasMoreOlder = false;
+    loadMoreBtn.hidden = true;
+    scrollDownBtn.hidden = true;
+    chatEmptyEl.hidden = true;
     typingIndicatorEl.textContent = '';
     clearAttachment();
     unreadCounts.set(id, 0);
@@ -156,8 +334,18 @@
 
     const res = await fetch(`/api/rooms/${id}/messages`);
     if (res.ok) {
-      const history = await res.json();
-      history.forEach(appendMessage);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : data.messages;
+      hasMoreOlder = data.has_more === true;
+      list.forEach((m) => {
+        const last = lastDayInList();
+        const cur = dayKey(m.created_at);
+        if (last !== cur) messagesEl.appendChild(buildDateSep(m.created_at));
+        messagesEl.appendChild(buildMessageEl(m));
+        if (oldestMessageId == null || m.id < oldestMessageId) oldestMessageId = m.id;
+      });
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      loadMoreBtn.hidden = !hasMoreOlder;
     }
 
     socket.emit('join', id);
@@ -166,6 +354,36 @@
     fileBtn.disabled = false;
     closeSidebar();
   }
+
+  loadMoreBtn.addEventListener('click', async () => {
+    if (loadingOlder || !currentRoomId || oldestMessageId == null) return;
+    loadingOlder = true;
+    loadMoreBtn.disabled = true;
+    const prevText = loadMoreBtn.textContent;
+    loadMoreBtn.textContent = '불러오는 중…';
+    try {
+      const res = await fetch(`/api/rooms/${currentRoomId}/messages?before=${oldestMessageId}`);
+      if (res.ok) {
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.messages;
+        prependHistory(list);
+        hasMoreOlder = data.has_more === true;
+        loadMoreBtn.hidden = !hasMoreOlder;
+      }
+    } finally {
+      loadingOlder = false;
+      loadMoreBtn.disabled = false;
+      loadMoreBtn.textContent = prevText;
+    }
+  });
+
+  messagesEl.addEventListener('scroll', () => {
+    if (nearBottom()) scrollDownBtn.hidden = true;
+  });
+  scrollDownBtn.addEventListener('click', () => {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    scrollDownBtn.hidden = true;
+  });
 
   function clearAttachment() {
     pendingAttachment = null;
@@ -184,18 +402,15 @@
       fileInput.value = '';
       return;
     }
-
     fileBtn.disabled = true;
     attachPreview.hidden = false;
     attachName.textContent = `업로드 중… ${file.name}`;
-
     try {
       const fd = new FormData();
       fd.append('file', file);
       const res = await fetch('/api/upload', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '업로드 실패');
-
       pendingAttachment = data;
       attachName.textContent = `📎 ${data.name} (${fmtSize(data.size)})`;
     } catch (err) {
@@ -233,7 +448,6 @@
     const text = msgInput.value.trim();
     if (!currentRoomId) return;
     if (!text && !pendingAttachment) return;
-
     socket.emit('message', { content: text, attachment: pendingAttachment });
     socket.emit('stop_typing');
     lastTypingEmit = 0;
@@ -246,13 +460,58 @@
     location.href = '/';
   });
 
-  socket.on('message', appendMessage);
+  socket.on('message', (m) => {
+    appendMessage(m);
+    if (m.user_id !== me.id && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(`${m.username} (${roomNameEl.textContent})`, {
+          body: m.content || (m.attachment ? '📎 첨부파일' : ''),
+          tag: `room-${currentRoomId}`,
+        });
+        n.onclick = () => { window.focus(); n.close(); };
+      } catch {}
+    }
+  });
   socket.on('error_msg', (m) => alert(m));
   socket.on('room_activity', ({ roomId, fromUserId }) => {
     if (fromUserId === me.id) return;
     if (roomId === currentRoomId) return;
     unreadCounts.set(roomId, (unreadCounts.get(roomId) || 0) + 1);
     renderBadges();
+  });
+
+  socket.on('message_updated', ({ id, content, edited_at }) => {
+    const li = messagesEl.querySelector(`li[data-message-id="${id}"]`);
+    if (!li) return;
+    const body = li.querySelector('.body');
+    if (body) body.textContent = content;
+    else {
+      const newBody = document.createElement('div');
+      newBody.className = 'body';
+      newBody.textContent = content;
+      li.querySelector('.bubble').appendChild(newBody);
+    }
+    let tag = li.querySelector('.edited-tag');
+    if (!tag) {
+      tag = document.createElement('span');
+      tag.className = 'edited-tag';
+      tag.textContent = '(수정됨)';
+      li.querySelector('.meta').appendChild(tag);
+    }
+  });
+
+  socket.on('message_deleted', ({ id }) => {
+    const li = messagesEl.querySelector(`li[data-message-id="${id}"]`);
+    if (!li) return;
+    li.classList.add('deleted');
+    const bubble = li.querySelector('.bubble');
+    if (bubble) {
+      bubble.querySelectorAll('.body, .msg-image, .msg-file, .msg-actions, .edited-tag').forEach((n) => n.remove());
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = '삭제된 메시지입니다';
+      bubble.appendChild(body);
+    }
   });
 
   let lastTypingEmit = 0;
@@ -266,10 +525,7 @@
 
   socket.on('typing_update', (users) => {
     const others = users.filter((u) => u.id !== me.id);
-    if (others.length === 0) {
-      typingIndicatorEl.textContent = '';
-      return;
-    }
+    if (others.length === 0) { typingIndicatorEl.textContent = ''; return; }
     const names = others.map((u) => u.username);
     const prefix = names.length === 1
       ? `${names[0]} 님이 입력 중`
@@ -287,25 +543,10 @@
   });
 
   socket.on('room_created', (room) => {
-    if (room.created_by === me.id) return;
     if (document.querySelector(`#room-list li[data-room-id="${room.id}"]`)) return;
-
-    unreadCounts.set(room.id, 0);
-    const li = document.createElement('li');
-    li.dataset.roomId = room.id;
-
-    const info = document.createElement('div');
-    info.className = 'room-info';
-    const name = document.createElement('div');
-    name.textContent = room.name;
-    const sub = document.createElement('small');
-    sub.textContent = `by ${room.created_by_name}`;
-    info.appendChild(name);
-    info.appendChild(sub);
-    li.appendChild(info);
-
-    li.addEventListener('click', () => joinRoom(room.id, room.name));
-    roomListEl.prepend(li);
+    if (room.created_by !== me.id) unreadCounts.set(room.id, 0);
+    roomListEl.prepend(buildRoomLi(room));
+    renderRoomEmpty();
   });
 
   const presenceListEl = document.getElementById('presence-list');
@@ -326,6 +567,13 @@
         li.textContent = u.username + (u.id === me.id ? ' (나)' : '');
         presenceListEl.appendChild(li);
       });
+  });
+
+  window.addEventListener('focus', () => {
+    if (currentRoomId) {
+      unreadCounts.set(currentRoomId, 0);
+      renderBadges();
+    }
   });
 
   await loadRooms();

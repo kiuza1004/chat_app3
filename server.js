@@ -68,9 +68,11 @@ function requireAuth(req, res, next) {
 }
 
 app.post('/api/signup', authLimiter, (req, res) => {
-  const { username, password } = req.body || {};
+  const username = String((req.body && req.body.username) || '').trim();
+  const password = String((req.body && req.body.password) || '');
   if (!username || !password) return res.status(400).json({ error: '아이디와 비밀번호를 입력하세요' });
   if (username.length < 2 || username.length > 20) return res.status(400).json({ error: '아이디는 2~20자' });
+  if (!/^[\w가-힣.\-]+$/.test(username)) return res.status(400).json({ error: '아이디는 영문/숫자/한글/_/-/. 만 가능' });
   if (password.length < 4) return res.status(400).json({ error: '비밀번호는 4자 이상' });
 
   if (db.findUserByName(username)) return res.status(409).json({ error: '이미 존재하는 아이디입니다' });
@@ -84,7 +86,8 @@ app.post('/api/signup', authLimiter, (req, res) => {
 });
 
 app.post('/api/login', authLimiter, (req, res) => {
-  const { username, password } = req.body || {};
+  const username = String((req.body && req.body.username) || '').trim();
+  const password = String((req.body && req.body.password) || '');
   if (!username || !password) return res.status(400).json({ error: '아이디와 비밀번호를 입력하세요' });
 
   const user = db.findUserByName(username);
@@ -95,6 +98,15 @@ app.post('/api/login', authLimiter, (req, res) => {
   req.session.userId = user.id;
   req.session.username = user.username;
   res.json({ id: user.id, username: user.username });
+});
+
+const startedAt = Date.now();
+app.get('/healthz', (_req, res) => {
+  res.json({
+    ok: true,
+    uptime_sec: Math.floor((Date.now() - startedAt) / 1000),
+    online_users: onlineUsers.size,
+  });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -134,7 +146,11 @@ app.post('/api/rooms', requireAuth, (req, res) => {
 app.get('/api/rooms/:id/messages', requireAuth, (req, res) => {
   const roomId = parseInt(req.params.id, 10);
   if (!Number.isInteger(roomId)) return res.status(400).json({ error: 'invalid room id' });
-  res.json(db.listMessages(roomId));
+  const beforeId = req.query.before ? parseInt(req.query.before, 10) : null;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const messages = db.listMessages(roomId, { beforeId, limit });
+  const hasMore = messages.length > 0 ? db.hasOlderMessages(roomId, messages[0].id) : false;
+  res.json({ messages, has_more: hasMore });
 });
 
 app.post('/api/upload', requireAuth, uploadLimiter, (req, res) => {
@@ -267,6 +283,7 @@ io.on('connection', (socket) => {
     const msg = db.createMessage(currentRoom, userId, username, text, attachment);
     io.to(`room:${currentRoom}`).emit('message', {
       id: msg.id,
+      user_id: msg.user_id,
       username: msg.username,
       content: msg.content,
       type: msg.type,
@@ -274,6 +291,32 @@ io.on('connection', (socket) => {
       created_at: msg.created_at,
     });
     io.emit('room_activity', { roomId: currentRoom, fromUserId: userId });
+  });
+
+  socket.on('edit_message', ({ id, content } = {}) => {
+    if (!currentRoom) return;
+    const messageId = parseInt(id, 10);
+    if (!Number.isInteger(messageId)) return;
+    const text = typeof content === 'string' ? content.trim().slice(0, 1000) : '';
+    if (!text) return socket.emit('error_msg', '내용이 비어있습니다');
+
+    const result = db.updateMessage(messageId, userId, text);
+    if (result.error) return socket.emit('error_msg', result.error);
+    io.to(`room:${currentRoom}`).emit('message_updated', {
+      id: result.message.id,
+      content: result.message.content,
+      edited_at: result.message.edited_at,
+    });
+  });
+
+  socket.on('delete_message', ({ id } = {}) => {
+    if (!currentRoom) return;
+    const messageId = parseInt(id, 10);
+    if (!Number.isInteger(messageId)) return;
+
+    const result = db.deleteMessage(messageId, userId);
+    if (result.error) return socket.emit('error_msg', result.error);
+    io.to(`room:${currentRoom}`).emit('message_deleted', { id: result.message.id });
   });
 
   socket.on('disconnect', () => {
@@ -290,6 +333,29 @@ io.on('connection', (socket) => {
     }
   });
 });
+
+// Daily backup of chat-data.json (keeps 7 most recent)
+function runBackup() {
+  try {
+    if (!fs.existsSync(db.DB_PATH)) return;
+    if (!fs.existsSync(db.BACKUP_DIR)) fs.mkdirSync(db.BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const dest = path.join(db.BACKUP_DIR, `chat-data-${stamp}.json`);
+    fs.copyFileSync(db.DB_PATH, dest);
+
+    const files = fs.readdirSync(db.BACKUP_DIR)
+      .filter((f) => /^chat-data-\d{8}\.json$/.test(f))
+      .sort();
+    while (files.length > 7) {
+      fs.unlinkSync(path.join(db.BACKUP_DIR, files.shift()));
+    }
+    console.log(`Backup written: ${dest}`);
+  } catch (err) {
+    console.error('Backup failed:', err.message);
+  }
+}
+setInterval(runBackup, 24 * 60 * 60 * 1000);
+setTimeout(runBackup, 30 * 1000);
 
 server.listen(PORT, () => {
   console.log(`Chat server running on http://localhost:${PORT}`);
