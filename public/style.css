@@ -81,6 +81,24 @@ button:disabled { background: #aab; cursor: not-allowed; }
 .send-form #file-btn:hover:not(:disabled) { background: #eef0f3; }
 .send-form #file-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.typing-indicator {
+  min-height: 18px;
+  padding: 0 20px 4px;
+  font-size: 12px;
+  color: #888;
+  font-style: italic;
+}
+.typing-indicator .dot {
+  display: inline-block;
+  animation: typing-dot 1.2s infinite;
+}
+.typing-indicator .dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-indicator .dot:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.3; }
+  30% { opacity: 1; }
+}
+
 .attachment-preview {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 16px; background: #eef4ff; border-top: 1px solid #d6e2ff;

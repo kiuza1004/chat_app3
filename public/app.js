@@ -19,6 +19,7 @@
   const attachName = document.getElementById('attachment-name');
   const attachCancel = document.getElementById('attachment-cancel');
   const roomNameEl = document.getElementById('room-name');
+  const typingIndicatorEl = document.getElementById('typing-indicator');
   const appEl = document.getElementById('app');
 
   const openSidebar = () => appEl.classList.add('show-sidebar');
@@ -145,6 +146,7 @@
     currentRoomId = id;
     roomNameEl.textContent = name;
     messagesEl.innerHTML = '';
+    typingIndicatorEl.textContent = '';
     clearAttachment();
     unreadCounts.set(id, 0);
     document.querySelectorAll('#room-list li').forEach((el) => {
@@ -233,6 +235,8 @@
     if (!text && !pendingAttachment) return;
 
     socket.emit('message', { content: text, attachment: pendingAttachment });
+    socket.emit('stop_typing');
+    lastTypingEmit = 0;
     msgInput.value = '';
     clearAttachment();
   });
@@ -249,6 +253,59 @@
     if (roomId === currentRoomId) return;
     unreadCounts.set(roomId, (unreadCounts.get(roomId) || 0) + 1);
     renderBadges();
+  });
+
+  let lastTypingEmit = 0;
+  msgInput.addEventListener('input', () => {
+    if (!currentRoomId) return;
+    const now = Date.now();
+    if (now - lastTypingEmit < 2000) return;
+    lastTypingEmit = now;
+    socket.emit('typing');
+  });
+
+  socket.on('typing_update', (users) => {
+    const others = users.filter((u) => u.id !== me.id);
+    if (others.length === 0) {
+      typingIndicatorEl.textContent = '';
+      return;
+    }
+    const names = others.map((u) => u.username);
+    const prefix = names.length === 1
+      ? `${names[0]} 님이 입력 중`
+      : names.length === 2
+        ? `${names[0]}, ${names[1]} 님이 입력 중`
+        : `${names[0]} 외 ${names.length - 1}명이 입력 중`;
+    typingIndicatorEl.innerHTML = '';
+    typingIndicatorEl.appendChild(document.createTextNode(prefix));
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.textContent = '.';
+      typingIndicatorEl.appendChild(dot);
+    }
+  });
+
+  socket.on('room_created', (room) => {
+    if (room.created_by === me.id) return;
+    if (document.querySelector(`#room-list li[data-room-id="${room.id}"]`)) return;
+
+    unreadCounts.set(room.id, 0);
+    const li = document.createElement('li');
+    li.dataset.roomId = room.id;
+
+    const info = document.createElement('div');
+    info.className = 'room-info';
+    const name = document.createElement('div');
+    name.textContent = room.name;
+    const sub = document.createElement('small');
+    sub.textContent = `by ${room.created_by_name}`;
+    info.appendChild(name);
+    info.appendChild(sub);
+    li.appendChild(info);
+
+    li.addEventListener('click', () => joinRoom(room.id, room.name));
+    roomListEl.prepend(li);
   });
 
   const presenceListEl = document.getElementById('presence-list');

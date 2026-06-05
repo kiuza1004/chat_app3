@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
+const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
 const db = require('./db');
 
@@ -38,10 +39,26 @@ const sessionMiddleware = session({
   cookie: { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 },
 });
 
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(sessionMiddleware);
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '요청이 너무 많습니다. 잠시 후 다시 시도하세요' },
+});
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '업로드 요청이 너무 많습니다. 잠시 후 다시 시도하세요' },
+});
 
 io.engine.use(sessionMiddleware);
 
@@ -50,7 +67,7 @@ function requireAuth(req, res, next) {
   next();
 }
 
-app.post('/api/signup', (req, res) => {
+app.post('/api/signup', authLimiter, (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: '아이디와 비밀번호를 입력하세요' });
   if (username.length < 2 || username.length > 20) return res.status(400).json({ error: '아이디는 2~20자' });
@@ -66,7 +83,7 @@ app.post('/api/signup', (req, res) => {
   res.json({ id: user.id, username: user.username });
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', authLimiter, (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: '아이디와 비밀번호를 입력하세요' });
 
@@ -104,6 +121,13 @@ app.post('/api/rooms', requireAuth, (req, res) => {
   if (db.findRoomByName(trimmed)) return res.status(409).json({ error: '이미 존재하는 방 이름입니다' });
 
   const room = db.createRoom(trimmed, req.session.userId);
+  io.emit('room_created', {
+    id: room.id,
+    name: room.name,
+    created_by: room.created_by,
+    created_by_name: req.session.username,
+    created_at: room.created_at,
+  });
   res.json({ id: room.id, name: room.name });
 });
 
@@ -113,7 +137,7 @@ app.get('/api/rooms/:id/messages', requireAuth, (req, res) => {
   res.json(db.listMessages(roomId));
 });
 
-app.post('/api/upload', requireAuth, (req, res) => {
+app.post('/api/upload', requireAuth, uploadLimiter, (req, res) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: '파일이 너무 큽니다 (최대 10MB)' });
@@ -136,6 +160,21 @@ app.post('/api/upload', requireAuth, (req, res) => {
 const onlineUsers = new Map();
 const getOnlineList = () => [...onlineUsers.values()].map((u) => ({ id: u.id, username: u.username }));
 
+const typingState = new Map();
+const typingKey = (roomId, userId) => `${roomId}:${userId}`;
+function removeTyping(roomId, userId) {
+  const entry = typingState.get(typingKey(roomId, userId));
+  if (!entry) return false;
+  clearTimeout(entry.timer);
+  typingState.delete(typingKey(roomId, userId));
+  return true;
+}
+function broadcastTyping(roomId) {
+  const list = [];
+  for (const v of typingState.values()) if (v.roomId === roomId) list.push({ id: v.userId, username: v.username });
+  io.to(`room:${roomId}`).emit('typing_update', list);
+}
+
 io.on('connection', (socket) => {
   const sess = socket.request.session;
   if (!sess || !sess.userId) {
@@ -146,6 +185,7 @@ io.on('connection', (socket) => {
   const userId = sess.userId;
   const username = sess.username;
   let currentRoom = null;
+  const recentMsgTimes = [];
 
   const wasOffline = !onlineUsers.has(userId);
   const entry = onlineUsers.get(userId) || { id: userId, username, count: 0 };
@@ -163,6 +203,7 @@ io.on('connection', (socket) => {
 
     if (currentRoom) {
       db.markRoomRead(userId, currentRoom);
+      if (removeTyping(currentRoom, userId)) broadcastTyping(currentRoom);
       socket.leave(`room:${currentRoom}`);
     }
     currentRoom = id;
@@ -171,8 +212,35 @@ io.on('connection', (socket) => {
     socket.emit('joined', { roomId: id, name: room.name });
   });
 
+  socket.on('typing', () => {
+    if (!currentRoom) return;
+    const key = typingKey(currentRoom, userId);
+    const existing = typingState.get(key);
+    if (existing) clearTimeout(existing.timer);
+    const timer = setTimeout(() => {
+      if (removeTyping(currentRoom, userId)) broadcastTyping(currentRoom);
+    }, 4000);
+    typingState.set(key, { roomId: currentRoom, userId, username, timer });
+    broadcastTyping(currentRoom);
+  });
+
+  socket.on('stop_typing', () => {
+    if (!currentRoom) return;
+    if (removeTyping(currentRoom, userId)) broadcastTyping(currentRoom);
+  });
+
   socket.on('message', (payload) => {
     if (!currentRoom) return;
+
+    const now = Date.now();
+    while (recentMsgTimes.length && now - recentMsgTimes[0] > 10000) recentMsgTimes.shift();
+    if (recentMsgTimes.length >= 20) {
+      socket.emit('error_msg', '메시지 전송 속도 제한 (10초당 20개)');
+      return;
+    }
+    recentMsgTimes.push(now);
+
+    if (removeTyping(currentRoom, userId)) broadcastTyping(currentRoom);
 
     let text = '';
     let attachment = null;
@@ -209,7 +277,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    if (currentRoom) db.markRoomRead(userId, currentRoom);
+    if (currentRoom) {
+      db.markRoomRead(userId, currentRoom);
+      if (removeTyping(currentRoom, userId)) broadcastTyping(currentRoom);
+    }
     const e = onlineUsers.get(userId);
     if (!e) return;
     e.count--;
